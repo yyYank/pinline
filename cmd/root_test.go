@@ -3,13 +3,23 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/yyYank/pinline/ailog"
+	"github.com/yyYank/pinline/editor"
 )
+
+// fakeOpenEditor は CI 等の実 tty が無い環境でも cmd パッケージの
+// テストが動くよう、tty フォールバックを持たない editor.Open を
+// そのまま使う openEditor 関数（テスト用）。tty 経由の起動確認は
+// editor パッケージ側の TestOpenInteractive が担う。
+func fakeOpenEditor(command []string, path string) error {
+	return editor.Open(command, path, nil, io.Discard, io.Discard)
+}
 
 // TestNewRootCmd は pinline / pi のどちらの名前でも起動できるように
 // Use が "pinline"、Aliases に "pi" が含まれ、--clipboard フラグが
@@ -222,7 +232,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		if err := run(src, &stdout, &stderr, getenv); err != nil {
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -251,7 +261,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		if err := run(src, &stdout, &stderr, getenv); err != nil {
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -278,7 +288,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		if err := run(src, &stdout, &stderr, getenv); err != nil {
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -311,7 +321,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		err := run(src, &stdout, &stderr, getenv)
+		err := run(src, &stdout, &stderr, getenv, fakeOpenEditor)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

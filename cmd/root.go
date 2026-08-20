@@ -122,7 +122,7 @@ func NewRootCmd() *cobra.Command {
 				AILog:            ailog.ClaudeLog{LogRoot: logRoot, Cwd: cwd},
 			}
 
-			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv)
+			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv, defaultOpenEditor)
 		},
 	}
 
@@ -131,16 +131,31 @@ func NewRootCmd() *cobra.Command {
 	return cmd
 }
 
+// openEditorFunc は解決済みのエディタコマンドで path を開き、終了（保存完了）
+// まで待機する関数の型。本番では defaultOpenEditor（tty フォールバック付き
+// の editor.OpenInteractive）を使うが、テストでは tty を必要としない実装へ
+// 差し替えられるようにする。
+type openEditorFunc func(command []string, path string) error
+
+// defaultOpenEditor は pinline プロセス自身の実際の標準入出力
+// (os.Stdin/os.Stdout/os.Stderr) を使って editor.OpenInteractive を呼び出す。
+// stdin/stdout がパイプの場合（`answer | pinline` 等）でも、
+// git が $EDITOR を起動する際と同様に /dev/tty へ接続し直してから
+// エディタを起動する。
+func defaultOpenEditor(command []string, path string) error {
+	return editor.OpenInteractive(command, path, os.Stdin, os.Stdout, os.Stderr, editor.DefaultInteractiveOptions())
+}
+
 // run は MVP の中心フローを実行する。
 //
 //  1. 入力元の優先順位に従って AI 回答を取得する（取得できなければ使い方を
 //     表示して非0終了し、エディタは起動しない）
 //  2. Markdown blockquote 化する
 //  3. 一時ファイル（.md）へ保存する
-//  4. $EDITOR で開く
+//  4. $EDITOR で開く（stdin/stdout がパイプでも /dev/tty へフォールバック）
 //  5. エディタ終了（保存完了）を待つ
 //  6. 編集済み Markdown を stdout へ返す（UI メッセージは stderr）
-func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string) error {
+func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, openEditor openEditorFunc) error {
 	input, err := resolveAnswer(src)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: could not obtain an AI answer to edit.")
@@ -168,10 +183,11 @@ func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string) 
 	editorCmd := editor.ResolveCommand(getenv)
 	fmt.Fprintf(stderr, "Opening %s with %v...\n", tmpPath, editorCmd)
 
-	// エディタ自体の対話的な入出力は、呼び出し元プロセスの実端末
-	// (os.Stdin/os.Stdout/os.Stderr) にそのまま接続する。stdin/stdout は
-	// AI 回答の読み込みと編集済み Markdown の返却専用に使う。
-	if err := editor.Open(editorCmd, tmpPath, os.Stdin, os.Stdout, os.Stderr); err != nil {
+	// エディタ自体の対話的な入出力は、pinline プロセス自身の stdin/stdout は
+	// AI 回答の読み込みと編集済み Markdown の返却専用に使うため使わない。
+	// openEditor（本番では defaultOpenEditor）が必要に応じて /dev/tty 等へ
+	// 接続してエディタを起動する。
+	if err := openEditor(editorCmd, tmpPath); err != nil {
 		return fmt.Errorf("failed to run editor: %w", err)
 	}
 
