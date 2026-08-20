@@ -1,5 +1,13 @@
 # pinline
 
+[English](#english) / [日本語](#日本語)
+
+---
+
+<a name="english"></a>
+
+## English
+
 `pinline` is a **file-based conversation protocol** that connects AI CLIs with your text editor.
 
 It takes responses from interactive AI CLIs such as Claude Code or Codex, writes them to Markdown, and opens them in any `$EDITOR` such as Vim, Neovim, or Zed so you can write prompts directly inline with the response.
@@ -125,6 +133,8 @@ The technical stack and repository structure are intended to follow the same gen
 Apache License 2.0
 
 ---
+
+<a name="日本語"></a>
 
 # 日本語
 
