@@ -8,13 +8,9 @@ import (
 	"time"
 )
 
-// TestEncodeProjectDir は cwd の絶対パスに含まれる "/" と "." を "-" へ
-// 置換してディレクトリ名を得られることを検証する。
-//
-// 注記: 依頼文中の例（.../yy_yank/... → .../yy-yank/...）はアンダースコアも
-// 置換されているように見えるが、明文化されたルールは「/」と「.」のみの
-// 置換なので、本実装・本テストはルール文の記述を優先し、アンダースコアは
-// 保持する。
+// TestEncodeProjectDir は cwd の絶対パスに含まれる "/" "." "_" を "-" へ
+// 置換してディレクトリ名を得られることを検証する
+// （実際の Claude Code のディレクトリ名はアンダースコアも置換される）。
 func TestEncodeProjectDir(t *testing.T) {
 	tests := []struct {
 		name string
@@ -22,14 +18,14 @@ func TestEncodeProjectDir(t *testing.T) {
 		want string
 	}{
 		{
-			name: "スラッシュとドットがハイフンに置換される",
+			name: "スラッシュ・ドット・アンダースコアがハイフンに置換される",
 			cwd:  "/Users/yy_yank/ghq/github.com/yyYank/pinline",
-			want: "-Users-yy_yank-ghq-github-com-yyYank-pinline",
+			want: "-Users-yy-yank-ghq-github-com-yyYank-pinline",
 		},
 		{
-			name: "ドットを含まないパスはスラッシュのみ置換される",
+			name: "ドットを含まないパスも置換される",
 			cwd:  "/Users/yy_yank/work",
-			want: "-Users-yy_yank-work",
+			want: "-Users-yy-yank-work",
 		},
 	}
 

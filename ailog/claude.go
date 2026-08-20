@@ -27,10 +27,10 @@ type claudeLogLine struct {
 }
 
 // EncodeProjectDir は Claude Code のセッションログ格納ディレクトリ名の
-// エンコード規則に従い、cwd の絶対パスに含まれる "/" と "." を "-" へ
+// エンコード規則に従い、cwd の絶対パスに含まれる "/" "." "_" を "-" へ
 // 置換する。
 func EncodeProjectDir(cwd string) string {
-	r := strings.NewReplacer("/", "-", ".", "-")
+	r := strings.NewReplacer("/", "-", ".", "-", "_", "-")
 	return r.Replace(cwd)
 }
 
