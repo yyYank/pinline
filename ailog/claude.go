@@ -17,13 +17,20 @@ import (
 // claudeLogLine は Claude Code のセッションログ（jsonl）1行分のうち、
 // 本実装で必要なフィールドのみを表す。未知のフィールドは無視する。
 type claudeLogLine struct {
-	Type    string `json:"type"`
-	Message struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Message   struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"message"`
+}
+
+// AssistantEntry は assistant 応答1件分のテキストとタイムスタンプを保持する。
+type AssistantEntry struct {
+	Text      string
+	Timestamp string
 }
 
 // EncodeProjectDir は Claude Code のセッションログ格納ディレクトリ名の
@@ -120,6 +127,64 @@ func LastAssistantText(path string) (string, error) {
 		return "", errors.New("no assistant text found in claude session log")
 	}
 	return lastText, nil
+}
+
+// LastNAssistantTexts は path の jsonl ログをスキャンし、テキストを含む
+// assistant メッセージを直近 n 件、新しい順で返す。
+func LastNAssistantTexts(path string, n int) ([]AssistantEntry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open claude session log: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	var all []AssistantEntry
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		var entry claudeLogLine
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry.Type != "assistant" {
+			continue
+		}
+
+		var texts []string
+		for _, c := range entry.Message.Content {
+			if c.Type == "text" && c.Text != "" {
+				texts = append(texts, c.Text)
+			}
+		}
+		if len(texts) > 0 {
+			all = append(all, AssistantEntry{
+				Text:      strings.Join(texts, ""),
+				Timestamp: entry.Timestamp,
+			})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read claude session log: %w", err)
+	}
+
+	if len(all) == 0 {
+		return nil, errors.New("no assistant text found in claude session log")
+	}
+
+	// 新しい順に並べ替え、先頭n件を返す
+	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+		all[i], all[j] = all[j], all[i]
+	}
+	if n < len(all) {
+		all = all[:n]
+	}
+	return all, nil
 }
 
 // ReadLastClaudeAnswer は logRoot/<encoded-cwd>/ から最も新しいセッション

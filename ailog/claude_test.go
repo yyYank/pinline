@@ -262,6 +262,96 @@ func TestClaudeLog_LastAnswer(t *testing.T) {
 	})
 }
 
+// TestLastNAssistantTexts は jsonl ログから直近N件の assistant テキストを
+// タイムスタンプ付きで新しい順に取得できることを検証する。
+func TestLastNAssistantTexts(t *testing.T) {
+	t.Run("直近N件のassistantテキストを新しい順に返す", func(t *testing.T) {
+		content := `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"回答1"}]}}
+{"type":"user","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"質問2"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:02:00.000Z","message":{"content":[{"type":"text","text":"回答2"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:04:00.000Z","message":{"content":[{"type":"text","text":"回答3"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNAssistantTexts(path, 2)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("got %d entries, want 2", len(entries))
+		}
+		if entries[0].Text != "回答3" {
+			t.Errorf("entries[0].Text = %q, want %q", entries[0].Text, "回答3")
+		}
+		if entries[1].Text != "回答2" {
+			t.Errorf("entries[1].Text = %q, want %q", entries[1].Text, "回答2")
+		}
+		if entries[0].Timestamp != "2026-01-01T10:04:00.000Z" {
+			t.Errorf("entries[0].Timestamp = %q, want %q", entries[0].Timestamp, "2026-01-01T10:04:00.000Z")
+		}
+	})
+
+	t.Run("Nがassistant数より多い場合は全件を返す", func(t *testing.T) {
+		content := `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"唯一の回答"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNAssistantTexts(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("got %d entries, want 1", len(entries))
+		}
+		if entries[0].Text != "唯一の回答" {
+			t.Errorf("entries[0].Text = %q, want %q", entries[0].Text, "唯一の回答")
+		}
+	})
+
+	t.Run("textを持たないassistantメッセージはスキップされる", func(t *testing.T) {
+		content := `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"有効な回答"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"tool_use","text":""}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNAssistantTexts(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("got %d entries, want 1", len(entries))
+		}
+		if entries[0].Text != "有効な回答" {
+			t.Errorf("entries[0].Text = %q, want %q", entries[0].Text, "有効な回答")
+		}
+	})
+
+	t.Run("assistantのtextが1つも見つからない場合はエラーを返す", func(t *testing.T) {
+		content := `{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"質問のみ"}]}}
+`
+		path := writeTempLog(t, content)
+
+		_, err := LastNAssistantTexts(path, 10)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("1メッセージ内の複数text要素は連結される", func(t *testing.T) {
+		content := `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"前半"},{"type":"text","text":"後半"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNAssistantTexts(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if entries[0].Text != "前半後半" {
+			t.Errorf("entries[0].Text = %q, want %q", entries[0].Text, "前半後半")
+		}
+	})
+}
+
 // writeTempLog はテスト用の一時 jsonl ファイルを作成しそのパスを返す。
 func writeTempLog(t *testing.T, content string) string {
 	t.Helper()
