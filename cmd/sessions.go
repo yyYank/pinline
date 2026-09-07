@@ -35,7 +35,7 @@ type sessionsDeps struct {
 }
 
 func defaultRunSessionTUI(m tui.SessionSelectorModel) (tui.SessionSelectorModel, error) {
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		return m, err
@@ -78,9 +78,13 @@ func runSessions(deps sessionsDeps, stdout, stderr io.Writer) error {
 
 	selected := sessionResult.Selected()
 
-	entries, err := ailog.LastNAssistantTexts(selected.LogPath, deps.N)
+	entryLimit := deps.N
+	if sessionResult.Filter() != "" {
+		entryLimit = 0
+	}
+	entries, err := ailog.LastNEntries(selected.LogPath, entryLimit)
 	if err != nil {
-		fmt.Fprintln(stderr, "Error: 選択されたセッションにassistant応答がありません。")
+		fmt.Fprintln(stderr, "Error: 選択されたセッションにエントリがありません。")
 		return err
 	}
 
@@ -177,12 +181,13 @@ func (d sessionsDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
 		cmd.Stdout = f
 		cmd.Stderr = f
 	}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tmux popup failed: %w", err)
-	}
+	runErr := cmd.Run()
 
 	result, err := os.ReadFile(outputPath)
 	if err != nil {
+		if runErr != nil {
+			return fmt.Errorf("tmux popup failed: %w", runErr)
+		}
 		return fmt.Errorf("failed to read popup output: %w", err)
 	}
 	if len(result) == 0 {

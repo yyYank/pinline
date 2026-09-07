@@ -482,6 +482,47 @@ func TestListSessions(t *testing.T) {
 	})
 }
 
+// TestLastNEntries は user+assistant 両方のエントリを返すことを検証する。
+func TestLastNEntries(t *testing.T) {
+	t.Run("user+assistant両方を新しい順に返す", func(t *testing.T) {
+		content := `{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"fzfについて教えて"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"fzfはファジーファインダーです"}]}}
+{"type":"user","timestamp":"2026-01-01T10:02:00.000Z","message":{"content":[{"type":"text","text":"使い方は？"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:03:00.000Z","message":{"content":[{"type":"text","text":"パイプで渡します"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNEntries(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 4 {
+			t.Fatalf("got %d entries, want 4", len(entries))
+		}
+		if entries[0].Role != "assistant" || entries[0].Text != "パイプで渡します" {
+			t.Errorf("entries[0] = %+v, want assistant 'パイプで渡します'", entries[0])
+		}
+		if entries[1].Role != "user" || entries[1].Text != "使い方は？" {
+			t.Errorf("entries[1] = %+v, want user '使い方は？'", entries[1])
+		}
+	})
+
+	t.Run("textを持たないエントリはスキップされる", func(t *testing.T) {
+		content := `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"tool_use","text":""}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"有効な回答"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNEntries(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("got %d entries, want 1", len(entries))
+		}
+	})
+}
+
 // writeTempLog はテスト用の一時 jsonl ファイルを作成しそのパスを返す。
 func writeTempLog(t *testing.T, content string) string {
 	t.Helper()

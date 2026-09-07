@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -190,5 +191,38 @@ func TestSelectorModel_Backspaceフィルタ削除(t *testing.T) {
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyBackspace})
 	if len(m.FilteredEntries()) != 3 {
 		t.Errorf("filtered count after backspace = %d, want 3", len(m.FilteredEntries()))
+	}
+}
+
+// Ctrl+Pでプレビューがトグルされる
+func TestSelectorModel_プレビュートグル(t *testing.T) {
+	m := NewSelectorModel(makeEntries())
+	m, _ = update(m, tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	view1 := m.View()
+	if strings.Contains(view1, "│") {
+		t.Fatal("expected no divider before Ctrl+P")
+	}
+
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	view2 := m.View()
+	if !strings.Contains(view2, "│") {
+		t.Fatal("expected divider after Ctrl+P")
+	}
+	if !strings.Contains(view2, "最初の回答です") {
+		t.Fatalf("expected preview text, got:\n%s", view2)
+	}
+}
+
+// プレビュー中にカーソル移動でプレビューが切り替わる
+func TestSelectorModel_プレビュー切替(t *testing.T) {
+	m := NewSelectorModel(makeEntries())
+	m, _ = update(m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyDown})
+
+	view := m.View()
+	if !strings.Contains(view, "二番目の回答です") {
+		t.Fatalf("expected second entry preview, got:\n%s", view)
 	}
 }
