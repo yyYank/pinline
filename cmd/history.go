@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +17,7 @@ import (
 	"github.com/yyYank/pinline/tui"
 )
 
-var errHistoryCancelled = errors.New("history selection cancelled")
+var errHistoryCancelled = fmt.Errorf("history selection: %w", ErrCancelled)
 
 type historyDeps struct {
 	LogRoot    string

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -11,6 +12,9 @@ import (
 
 func main() {
 	if err := cmd.NewRootCmd().Execute(); err != nil {
+		if errors.Is(err, cmd.ErrCancelled) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
