@@ -43,7 +43,7 @@ func defaultHasTTY() bool {
 }
 
 func defaultRunTUI(m tui.SelectorModel) (tui.SelectorModel, error) {
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		return m, err
@@ -164,12 +164,13 @@ func (d historyDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
 		cmd.Stdout = f
 		cmd.Stderr = f
 	}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tmux popup failed: %w", err)
-	}
+	runErr := cmd.Run()
 
 	result, err := os.ReadFile(outputPath)
 	if err != nil {
+		if runErr != nil {
+			return fmt.Errorf("tmux popup failed: %w", runErr)
+		}
 		return fmt.Errorf("failed to read popup output: %w", err)
 	}
 	if len(result) == 0 {

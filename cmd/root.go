@@ -105,7 +105,8 @@ func NewRootCmd() *cobra.Command {
 		Use:          "pinline",
 		Aliases:      []string{"pi"},
 		Short:        "AI CLI とエディタをつなぐファイルベースの会話プロトコル CLI",
-		SilenceUsage: true,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, _ := os.Getwd()
 			logRoot := ""
