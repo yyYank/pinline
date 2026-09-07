@@ -10,9 +10,126 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
+
+// SessionInfo はセッション1件分のメタ情報を保持する。
+type SessionInfo struct {
+	SessionID  string
+	LogPath    string
+	GitBranch  string
+	StartedAt  string
+	ModTime    time.Time
+	SearchText string
+}
+
+// claudeUserLogLine は jsonl の user 行からセッションメタ情報を取り出すための構造体。
+type claudeUserLogLine struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	SessionID string `json:"sessionId"`
+	GitBranch string `json:"gitBranch"`
+}
+
+// ListSessions は logRoot/<encoded-cwd>/ 配下の *.jsonl を走査し、
+// 各セッションのメタ情報を mtime 降順で最大 n 件返す。
+// user エントリを持たないファイルはスキップする。
+func ListSessions(logRoot, cwd string, n int) ([]SessionInfo, error) {
+	dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read claude session log directory %s: %w", dir, err)
+	}
+
+	var sessions []SessionInfo
+	for _, e := range dirEntries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		logPath := filepath.Join(dir, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+
+		meta, searchText, ok := readSessionMeta(logPath)
+		if !ok {
+			continue
+		}
+
+		sessions = append(sessions, SessionInfo{
+			SessionID:  meta.SessionID,
+			LogPath:    logPath,
+			GitBranch:  meta.GitBranch,
+			StartedAt:  meta.Timestamp,
+			ModTime:    info.ModTime(),
+			SearchText: searchText,
+		})
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ModTime.After(sessions[j].ModTime)
+	})
+
+	if n < len(sessions) {
+		sessions = sessions[:n]
+	}
+	return sessions, nil
+}
+
+// readSessionMeta は jsonl ファイルを走査し、最初の type:"user" 行のメタ情報と
+// 全 user+assistant テキストを連結した検索用文字列を返す。
+// user エントリが見つからなければ ok=false。
+func readSessionMeta(path string) (claudeUserLogLine, string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return claudeUserLogLine{}, "", false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	var meta claudeUserLogLine
+	var foundUser bool
+	var textParts []string
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		var logLine claudeLogLine
+		if err := json.Unmarshal(line, &logLine); err != nil {
+			continue
+		}
+
+		if !foundUser {
+			var userLine claudeUserLogLine
+			if err := json.Unmarshal(line, &userLine); err == nil && userLine.Type == "user" {
+				meta = userLine
+				foundUser = true
+			}
+		}
+
+		if logLine.Type == "user" || logLine.Type == "assistant" {
+			for _, c := range logLine.Message.Content {
+				if c.Type == "text" && c.Text != "" {
+					textParts = append(textParts, c.Text)
+				}
+			}
+		}
+	}
+
+	if !foundUser {
+		return claudeUserLogLine{}, "", false
+	}
+	return meta, strings.Join(textParts, " "), true
+}
 
 // claudeLogLine は Claude Code のセッションログ（jsonl）1行分のうち、
 // 本実装で必要なフィールドのみを表す。未知のフィールドは無視する。

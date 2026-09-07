@@ -129,6 +129,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&clipboardFlag, "clipboard", false, "AI 回答をクリップボードから取得する")
 
 	cmd.AddCommand(newHistoryCmd())
+	cmd.AddCommand(newSessionsCmd())
 
 	return cmd
 }
