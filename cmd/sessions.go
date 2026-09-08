@@ -17,51 +17,42 @@ import (
 	"github.com/yyYank/pinline/tui"
 )
 
-var errHistoryCancelled = fmt.Errorf("history selection: %w", ErrCancelled)
+var errSessionsCancelled = fmt.Errorf("sessions selection: %w", ErrCancelled)
 
-type historyDeps struct {
+type sessionsDeps struct {
 	LogRoot    string
 	Cwd        string
 	N          int
 	OutputFile string
 	Getenv     func(string) string
 	OpenEditor openEditorFunc
-	RunTUI     func(tui.SelectorModel) (tui.SelectorModel, error)
+	RunSessionTUI func(tui.SessionSelectorModel) (tui.SessionSelectorModel, error)
+	RunTUI        func(tui.SelectorModel) (tui.SelectorModel, error)
 
 	HasTTY        func() bool
 	TmuxAvailable func() bool
 	SelfPath      func() (string, error)
 }
 
-func defaultHasTTY() bool {
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	return true
-}
-
-func defaultRunTUI(m tui.SelectorModel) (tui.SelectorModel, error) {
+func defaultRunSessionTUI(m tui.SessionSelectorModel) (tui.SessionSelectorModel, error) {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		return m, err
 	}
-	return final.(tui.SelectorModel), nil
+	return final.(tui.SessionSelectorModel), nil
 }
 
-func runHistory(deps historyDeps, stdout, stderr io.Writer) error {
-	logPath, err := ailog.LatestSessionLogPath(deps.LogRoot, deps.Cwd)
+func runSessions(deps sessionsDeps, stdout, stderr io.Writer) error {
+	sessions, err := ailog.ListSessions(deps.LogRoot, deps.Cwd, deps.N)
 	if err != nil {
-		fmt.Fprintln(stderr, "Error: セッションログが見つかりません。")
+		fmt.Fprintln(stderr, "Error: セッション一覧を取得できません。")
 		return err
 	}
 
-	entries, err := ailog.LastNAssistantTexts(logPath, deps.N)
-	if err != nil {
-		fmt.Fprintln(stderr, "Error: assistant応答が見つかりません。")
-		return err
+	if len(sessions) == 0 {
+		fmt.Fprintln(stderr, "Error: セッションが見つかりません。")
+		return fmt.Errorf("no sessions found")
 	}
 
 	hasTTY := deps.HasTTY
@@ -75,20 +66,46 @@ func runHistory(deps historyDeps, stdout, stderr io.Writer) error {
 		return fmt.Errorf("TUI error: TTYが無く、tmuxも利用できません。tmux内で実行してください")
 	}
 
-	m := tui.NewSelectorModel(entries)
-	result, err := deps.RunTUI(m)
+	sm := tui.NewSessionSelectorModel(sessions)
+	sessionResult, err := deps.RunSessionTUI(sm)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
-	if result.Cancelled() || result.Selected() == nil {
-		return errHistoryCancelled
+	if sessionResult.Cancelled() || sessionResult.Selected() == nil {
+		return errSessionsCancelled
 	}
 
-	selected := result.Selected()
-	quoted := document.ToBlockquote(selected.Text)
+	selected := sessionResult.Selected()
 
-	tmpFile, err := os.CreateTemp("", "pinline-history-*.md")
+	entryLimit := deps.N
+	if sessionResult.Filter() != "" {
+		entryLimit = 0
+	}
+	entries, err := ailog.LastNEntries(selected.LogPath, entryLimit)
+	if err != nil {
+		fmt.Fprintln(stderr, "Error: 選択されたセッションにエントリがありません。")
+		return err
+	}
+
+	em := tui.NewSelectorModel(entries)
+	runTUI := deps.RunTUI
+	if runTUI == nil {
+		runTUI = defaultRunTUI
+	}
+	entryResult, err := runTUI(em)
+	if err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+
+	if entryResult.Cancelled() || entryResult.Selected() == nil {
+		return errSessionsCancelled
+	}
+
+	entry := entryResult.Selected()
+	quoted := document.ToBlockquote(entry.Text)
+
+	tmpFile, err := os.CreateTemp("", "pinline-sessions-*.md")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -122,7 +139,7 @@ func runHistory(deps historyDeps, stdout, stderr io.Writer) error {
 	return transport.WriteStdout(stdout, string(edited))
 }
 
-func (d historyDeps) inTmux() bool {
+func (d sessionsDeps) inTmux() bool {
 	getenv := d.Getenv
 	if getenv == nil {
 		getenv = os.Getenv
@@ -134,7 +151,7 @@ func (d historyDeps) inTmux() bool {
 	return getenv("TMUX") != "" && tmuxAvail()
 }
 
-func (d historyDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
+func (d sessionsDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
 	selfPath := d.SelfPath
 	if selfPath == nil {
 		selfPath = os.Executable
@@ -144,7 +161,7 @@ func (d historyDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
 		return fmt.Errorf("failed to resolve self path: %w", err)
 	}
 
-	outputFile, err := os.CreateTemp("", "pinline-history-output-*.md")
+	outputFile, err := os.CreateTemp("", "pinline-sessions-output-*.md")
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -152,11 +169,11 @@ func (d historyDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
 	outputFile.Close()
 	defer os.Remove(outputPath)
 
-	fmt.Fprintln(stderr, "tmux popupで履歴選択UIを起動します。")
+	fmt.Fprintln(stderr, "tmux popupでセッション選択UIを起動します。")
 
 	args := []string{
 		"display-popup", "-E", "-w", "90%", "-h", "90%", "-d", d.Cwd, "--",
-		exe, "history", "-n", strconv.Itoa(d.N), "--_output", outputPath,
+		exe, "sessions", "-n", strconv.Itoa(d.N), "--_output", outputPath,
 	}
 	cmd := exec.Command("tmux", args...)
 	cmd.Stdin = nil
@@ -174,19 +191,19 @@ func (d historyDeps) runViaTmuxPopup(stdout, stderr io.Writer) error {
 		return fmt.Errorf("failed to read popup output: %w", err)
 	}
 	if len(result) == 0 {
-		return errHistoryCancelled
+		return errSessionsCancelled
 	}
 
 	return transport.WriteStdout(stdout, string(result))
 }
 
-func newHistoryCmd() *cobra.Command {
+func newSessionsCmd() *cobra.Command {
 	var n int
 	var outputFile string
 
 	cmd := &cobra.Command{
-		Use:   "history",
-		Short: "過去のAI応答履歴を選択してエディタで開く",
+		Use:   "sessions",
+		Short: "セッション一覧から選択してAI応答履歴を引用する",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, _ := os.Getwd()
 			logRoot := ""
@@ -194,23 +211,24 @@ func newHistoryCmd() *cobra.Command {
 				logRoot = home + "/.claude/projects"
 			}
 
-			deps := historyDeps{
+			deps := sessionsDeps{
 				LogRoot:       logRoot,
 				Cwd:           cwd,
 				N:             n,
 				OutputFile:    outputFile,
 				Getenv:        os.Getenv,
 				OpenEditor:    defaultOpenEditor,
+				RunSessionTUI: defaultRunSessionTUI,
 				RunTUI:        defaultRunTUI,
 				HasTTY:        defaultHasTTY,
 				TmuxAvailable: editor.DefaultTmuxAvailable,
 			}
 
-			return runHistory(deps, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			return runSessions(deps, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 
-	cmd.Flags().IntVarP(&n, "number", "n", 10, "表示する履歴の件数")
+	cmd.Flags().IntVarP(&n, "number", "n", 10, "表示するセッションの件数")
 	cmd.Flags().StringVar(&outputFile, "_output", "", "")
 	cmd.Flags().MarkHidden("_output")
 

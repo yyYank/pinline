@@ -2,8 +2,10 @@ package ailog
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -348,6 +350,175 @@ func TestLastNAssistantTexts(t *testing.T) {
 		}
 		if entries[0].Text != "前半後半" {
 			t.Errorf("entries[0].Text = %q, want %q", entries[0].Text, "前半後半")
+		}
+	})
+}
+
+// TestListSessions はセッション一覧取得を検証する。
+func TestListSessions(t *testing.T) {
+	t.Run("直近N件のセッションをmtime降順で返す", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create log dir: %v", err)
+		}
+
+		now := time.Now()
+
+		// セッション1: 古い
+		s1 := filepath.Join(dir, "session-old.jsonl")
+		os.WriteFile(s1, []byte(`{"type":"user","timestamp":"2026-01-01T09:00:00.000Z","sessionId":"session-old","gitBranch":"main"}
+{"type":"assistant","timestamp":"2026-01-01T09:01:00.000Z","message":{"content":[{"type":"text","text":"回答"}]}}
+`), 0o644)
+		os.Chtimes(s1, now, now.Add(-2*time.Hour))
+
+		// セッション2: 新しい
+		s2 := filepath.Join(dir, "session-new.jsonl")
+		os.WriteFile(s2, []byte(`{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","sessionId":"session-new","gitBranch":"feature/x"}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"回答"}]}}
+`), 0o644)
+		os.Chtimes(s2, now, now)
+
+		sessions, err := ListSessions(logRoot, cwd, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sessions) != 2 {
+			t.Fatalf("got %d sessions, want 2", len(sessions))
+		}
+		if sessions[0].SessionID != "session-new" {
+			t.Errorf("sessions[0].SessionID = %q, want %q", sessions[0].SessionID, "session-new")
+		}
+		if sessions[0].GitBranch != "feature/x" {
+			t.Errorf("sessions[0].GitBranch = %q, want %q", sessions[0].GitBranch, "feature/x")
+		}
+		if sessions[1].SessionID != "session-old" {
+			t.Errorf("sessions[1].SessionID = %q, want %q", sessions[1].SessionID, "session-old")
+		}
+	})
+
+	t.Run("N件に制限される", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		os.MkdirAll(dir, 0o755)
+
+		now := time.Now()
+		for i := 0; i < 5; i++ {
+			name := filepath.Join(dir, fmt.Sprintf("s%d.jsonl", i))
+			os.WriteFile(name, []byte(fmt.Sprintf(`{"type":"user","timestamp":"2026-01-01T%02d:00:00.000Z","sessionId":"s%d","gitBranch":"main"}
+`, i, i)), 0o644)
+			os.Chtimes(name, now, now.Add(time.Duration(i)*time.Minute))
+		}
+
+		sessions, err := ListSessions(logRoot, cwd, 2)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sessions) != 2 {
+			t.Fatalf("got %d sessions, want 2", len(sessions))
+		}
+	})
+
+	t.Run("userエントリ無しのjsonlはスキップされる", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		os.MkdirAll(dir, 0o755)
+
+		// userエントリ無し
+		os.WriteFile(filepath.Join(dir, "empty.jsonl"), []byte(`{"type":"mode","mode":"normal"}
+`), 0o644)
+		// userエントリ有り
+		os.WriteFile(filepath.Join(dir, "valid.jsonl"), []byte(`{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","sessionId":"valid","gitBranch":"main"}
+`), 0o644)
+
+		sessions, err := ListSessions(logRoot, cwd, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("got %d sessions, want 1", len(sessions))
+		}
+		if sessions[0].SessionID != "valid" {
+			t.Errorf("sessions[0].SessionID = %q, want %q", sessions[0].SessionID, "valid")
+		}
+	})
+
+	t.Run("SearchTextにuser+assistantの全テキストが含まれる", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		os.MkdirAll(dir, 0o755)
+
+		content := `{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","sessionId":"s1","gitBranch":"main","message":{"content":[{"type":"text","text":"デプロイ手順を教えて"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"まずDockerfileを作成します"}]}}
+{"type":"user","timestamp":"2026-01-01T10:02:00.000Z","message":{"content":[{"type":"text","text":"ありがとう"}]}}
+`
+		os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(content), 0o644)
+
+		sessions, err := ListSessions(logRoot, cwd, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("got %d sessions, want 1", len(sessions))
+		}
+		st := sessions[0].SearchText
+		if !strings.Contains(st, "デプロイ手順を教えて") {
+			t.Errorf("SearchText should contain user text, got %q", st)
+		}
+		if !strings.Contains(st, "Dockerfileを作成します") {
+			t.Errorf("SearchText should contain assistant text, got %q", st)
+		}
+	})
+
+	t.Run("ディレクトリが存在しない場合はエラーを返す", func(t *testing.T) {
+		_, err := ListSessions(t.TempDir(), "/no/such/project", 10)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+// TestLastNEntries は user+assistant 両方のエントリを返すことを検証する。
+func TestLastNEntries(t *testing.T) {
+	t.Run("user+assistant両方を新しい順に返す", func(t *testing.T) {
+		content := `{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"fzfについて教えて"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"fzfはファジーファインダーです"}]}}
+{"type":"user","timestamp":"2026-01-01T10:02:00.000Z","message":{"content":[{"type":"text","text":"使い方は？"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:03:00.000Z","message":{"content":[{"type":"text","text":"パイプで渡します"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNEntries(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 4 {
+			t.Fatalf("got %d entries, want 4", len(entries))
+		}
+		if entries[0].Role != "assistant" || entries[0].Text != "パイプで渡します" {
+			t.Errorf("entries[0] = %+v, want assistant 'パイプで渡します'", entries[0])
+		}
+		if entries[1].Role != "user" || entries[1].Text != "使い方は？" {
+			t.Errorf("entries[1] = %+v, want user '使い方は？'", entries[1])
+		}
+	})
+
+	t.Run("textを持たないエントリはスキップされる", func(t *testing.T) {
+		content := `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"tool_use","text":""}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00.000Z","message":{"content":[{"type":"text","text":"有効な回答"}]}}
+`
+		path := writeTempLog(t, content)
+
+		entries, err := LastNEntries(path, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("got %d entries, want 1", len(entries))
 		}
 	})
 }

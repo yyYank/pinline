@@ -10,9 +10,126 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
+
+// SessionInfo はセッション1件分のメタ情報を保持する。
+type SessionInfo struct {
+	SessionID  string
+	LogPath    string
+	GitBranch  string
+	StartedAt  string
+	ModTime    time.Time
+	SearchText string
+}
+
+// claudeUserLogLine は jsonl の user 行からセッションメタ情報を取り出すための構造体。
+type claudeUserLogLine struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	SessionID string `json:"sessionId"`
+	GitBranch string `json:"gitBranch"`
+}
+
+// ListSessions は logRoot/<encoded-cwd>/ 配下の *.jsonl を走査し、
+// 各セッションのメタ情報を mtime 降順で最大 n 件返す。
+// user エントリを持たないファイルはスキップする。
+func ListSessions(logRoot, cwd string, n int) ([]SessionInfo, error) {
+	dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read claude session log directory %s: %w", dir, err)
+	}
+
+	var sessions []SessionInfo
+	for _, e := range dirEntries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		logPath := filepath.Join(dir, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+
+		meta, searchText, ok := readSessionMeta(logPath)
+		if !ok {
+			continue
+		}
+
+		sessions = append(sessions, SessionInfo{
+			SessionID:  meta.SessionID,
+			LogPath:    logPath,
+			GitBranch:  meta.GitBranch,
+			StartedAt:  meta.Timestamp,
+			ModTime:    info.ModTime(),
+			SearchText: searchText,
+		})
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ModTime.After(sessions[j].ModTime)
+	})
+
+	if n < len(sessions) {
+		sessions = sessions[:n]
+	}
+	return sessions, nil
+}
+
+// readSessionMeta は jsonl ファイルを走査し、最初の type:"user" 行のメタ情報と
+// 全 user+assistant テキストを連結した検索用文字列を返す。
+// user エントリが見つからなければ ok=false。
+func readSessionMeta(path string) (claudeUserLogLine, string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return claudeUserLogLine{}, "", false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	var meta claudeUserLogLine
+	var foundUser bool
+	var textParts []string
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		var logLine claudeLogLine
+		if err := json.Unmarshal(line, &logLine); err != nil {
+			continue
+		}
+
+		if !foundUser {
+			var userLine claudeUserLogLine
+			if err := json.Unmarshal(line, &userLine); err == nil && userLine.Type == "user" {
+				meta = userLine
+				foundUser = true
+			}
+		}
+
+		if logLine.Type == "user" || logLine.Type == "assistant" {
+			for _, c := range logLine.Message.Content {
+				if c.Type == "text" && c.Text != "" {
+					textParts = append(textParts, c.Text)
+				}
+			}
+		}
+	}
+
+	if !foundUser {
+		return claudeUserLogLine{}, "", false
+	}
+	return meta, strings.Join(textParts, "\n\n"), true
+}
 
 // claudeLogLine は Claude Code のセッションログ（jsonl）1行分のうち、
 // 本実装で必要なフィールドのみを表す。未知のフィールドは無視する。
@@ -27,10 +144,11 @@ type claudeLogLine struct {
 	} `json:"message"`
 }
 
-// AssistantEntry は assistant 応答1件分のテキストとタイムスタンプを保持する。
+// AssistantEntry はセッションログ内の1件分のテキストとタイムスタンプを保持する。
 type AssistantEntry struct {
 	Text      string
 	Timestamp string
+	Role      string
 }
 
 // EncodeProjectDir は Claude Code のセッションログ格納ディレクトリ名の
@@ -185,6 +303,72 @@ func LastNAssistantTexts(path string, n int) ([]AssistantEntry, error) {
 		all = all[:n]
 	}
 	return all, nil
+}
+
+// LastNEntries は path の jsonl ログをスキャンし、テキストを含む
+// user および assistant メッセージを直近 n 件、新しい順で返す。
+func LastNEntries(path string, n int) ([]AssistantEntry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open claude session log: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	var all []AssistantEntry
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		var entry claudeLogLine
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry.Type != "user" && entry.Type != "assistant" {
+			continue
+		}
+
+		var texts []string
+		for _, c := range entry.Message.Content {
+			if c.Type == "text" && c.Text != "" {
+				texts = append(texts, c.Text)
+			}
+		}
+		if len(texts) > 0 {
+			joined := strings.Join(texts, "")
+			if isSystemMessage(joined) {
+				continue
+			}
+			all = append(all, AssistantEntry{
+				Text:      joined,
+				Timestamp: entry.Timestamp,
+				Role:      entry.Type,
+			})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read claude session log: %w", err)
+	}
+
+	if len(all) == 0 {
+		return nil, errors.New("no text entries found in claude session log")
+	}
+
+	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+		all[i], all[j] = all[j], all[i]
+	}
+	if n > 0 && n < len(all) {
+		all = all[:n]
+	}
+	return all, nil
+}
+
+func isSystemMessage(text string) bool {
+	return strings.HasPrefix(text, "[Request interrupted by user")
 }
 
 // ReadLastClaudeAnswer は logRoot/<encoded-cwd>/ から最も新しいセッション
