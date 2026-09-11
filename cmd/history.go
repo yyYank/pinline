@@ -43,7 +43,7 @@ func defaultHasTTY() bool {
 }
 
 func defaultRunTUI(m tui.SelectorModel) (tui.SelectorModel, error) {
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithInputTTY())
 	final, err := p.Run()
 	if err != nil {
 		return m, err
@@ -52,7 +52,17 @@ func defaultRunTUI(m tui.SelectorModel) (tui.SelectorModel, error) {
 }
 
 func runHistory(deps historyDeps, stdout, stderr io.Writer) error {
-	logPath, err := ailog.LatestSessionLogPath(deps.LogRoot, deps.Cwd)
+	var logPath string
+	var err error
+	getenv := deps.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	if sid := getenv("CLAUDE_CODE_SESSION_ID"); sid != "" {
+		logPath, err = ailog.SessionLogPathByID(deps.LogRoot, deps.Cwd, sid)
+	} else {
+		logPath, err = ailog.LatestSessionLogPath(deps.LogRoot, deps.Cwd)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: セッションログが見つかりません。")
 		return err

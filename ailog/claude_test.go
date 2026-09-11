@@ -523,6 +523,80 @@ func TestLastNEntries(t *testing.T) {
 	})
 }
 
+// セッションIDでログファイルを直接特定できる
+func TestSessionLogPathByID(t *testing.T) {
+	t.Run("セッションIDに対応するjsonlファイルのパスを返す", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		os.MkdirAll(dir, 0o755)
+
+		sessionID := "abc-123-def"
+		logFile := filepath.Join(dir, sessionID+".jsonl")
+		os.WriteFile(logFile, []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"回答"}]}}`), 0o644)
+
+		got, err := SessionLogPathByID(logRoot, cwd, sessionID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != logFile {
+			t.Errorf("got %q, want %q", got, logFile)
+		}
+	})
+
+	t.Run("存在しないセッションIDはエラーを返す", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		os.MkdirAll(dir, 0o755)
+
+		_, err := SessionLogPathByID(logRoot, cwd, "nonexistent-id")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+// セッションID指定のSource実装が正しいセッションの回答を返す
+func TestClaudeSessionLog_LastAnswer(t *testing.T) {
+	t.Run("指定セッションIDのログから最後のassistant回答を返す", func(t *testing.T) {
+		logRoot := t.TempDir()
+		cwd := "/Users/tester/project"
+		dir := filepath.Join(logRoot, EncodeProjectDir(cwd))
+		os.MkdirAll(dir, 0o755)
+
+		sessionID := "target-session-id"
+		os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte(
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"正しいセッションの回答"}]}}
+`), 0o644)
+
+		// mtime的にはこちらが新しいが、セッションIDで指定したほうが返る
+		otherFile := filepath.Join(dir, "other-session.jsonl")
+		os.WriteFile(otherFile, []byte(
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"別セッションの回答"}]}}
+`), 0o644)
+		now := time.Now()
+		os.Chtimes(otherFile, now, now.Add(1*time.Hour))
+
+		src := ClaudeSessionLog{LogRoot: logRoot, Cwd: cwd, SessionID: sessionID}
+		got, err := src.LastAnswer()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "正しいセッションの回答" {
+			t.Errorf("got %q, want %q", got, "正しいセッションの回答")
+		}
+	})
+
+	t.Run("存在しないセッションIDはエラーを返す", func(t *testing.T) {
+		src := ClaudeSessionLog{LogRoot: t.TempDir(), Cwd: "/Users/tester/project", SessionID: "missing"}
+		_, err := src.LastAnswer()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
 // writeTempLog はテスト用の一時 jsonl ファイルを作成しそのパスを返す。
 func writeTempLog(t *testing.T, content string) string {
 	t.Helper()

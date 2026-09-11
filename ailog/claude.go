@@ -159,6 +159,16 @@ func EncodeProjectDir(cwd string) string {
 	return r.Replace(cwd)
 }
 
+// SessionLogPathByID は logRoot/<encoded-cwd>/<sessionID>.jsonl のパスを返す。
+// ファイルが存在しなければエラーを返す。
+func SessionLogPathByID(logRoot, cwd, sessionID string) (string, error) {
+	path := filepath.Join(logRoot, EncodeProjectDir(cwd), sessionID+".jsonl")
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("session log not found for ID %s: %w", sessionID, err)
+	}
+	return path, nil
+}
+
 // LatestSessionLogPath は logRoot/<encoded-cwd>/ 配下にある *.jsonl の中で
 // 最終更新（mtime）が最も新しいファイルのパスを返す。
 func LatestSessionLogPath(logRoot, cwd string) (string, error) {
@@ -398,3 +408,20 @@ func (c ClaudeLog) LastAnswer() (string, error) {
 }
 
 var _ Source = ClaudeLog{}
+
+// ClaudeSessionLog はセッションIDを指定してログを取得する Source の実装。
+type ClaudeSessionLog struct {
+	LogRoot   string
+	Cwd       string
+	SessionID string
+}
+
+func (c ClaudeSessionLog) LastAnswer() (string, error) {
+	path, err := SessionLogPathByID(c.LogRoot, c.Cwd, c.SessionID)
+	if err != nil {
+		return "", err
+	}
+	return LastAssistantText(path)
+}
+
+var _ Source = ClaudeSessionLog{}

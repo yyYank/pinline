@@ -35,7 +35,7 @@ type sessionsDeps struct {
 }
 
 func defaultRunSessionTUI(m tui.SessionSelectorModel) (tui.SessionSelectorModel, error) {
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithInputTTY())
 	final, err := p.Run()
 	if err != nil {
 		return m, err
