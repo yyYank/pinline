@@ -114,13 +114,20 @@ func NewRootCmd() *cobra.Command {
 				logRoot = home + "/.claude/projects"
 			}
 
+			var aiLogSource ailog.Source
+			if sid := os.Getenv("CLAUDE_CODE_SESSION_ID"); sid != "" {
+				aiLogSource = ailog.ClaudeSessionLog{LogRoot: logRoot, Cwd: cwd, SessionID: sid}
+			} else {
+				aiLogSource = ailog.ClaudeLog{LogRoot: logRoot, Cwd: cwd}
+			}
+
 			src := inputSource{
 				StdinIsPipe:      isPipe(os.Stdin),
 				ClipboardFlag:    clipboardFlag,
 				Stdin:            cmd.InOrStdin(),
 				ReadClipboard:    clipboard.ReadClipboard,
 				ClipboardCommand: clipboard.DefaultClipboardCommand,
-				AILog:            ailog.ClaudeLog{LogRoot: logRoot, Cwd: cwd},
+				AILog:            aiLogSource,
 			}
 
 			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv, defaultOpenEditor)
