@@ -22,7 +22,7 @@ import (
 const usageMessage = `使い方:
   cat answer.txt | pinline   # stdin から AI 回答を読み込む
   pinline --clipboard        # クリップボードから読み込む
-  pinline                    # Claude Code の直前セッションログから読み込む`
+  pinline                    # 直前の AI セッションログから読み込む`
 
 // errNoAnswerSource はどの入力元からも AI 回答を取得できなかったことを表す。
 var errNoAnswerSource = errors.New("no AI answer source available")
@@ -51,7 +51,7 @@ type inputSource struct {
 // resolveAnswer は SPEC.md §21 の優先順位に従って AI 回答本文を取得する。
 //  1. stdin が pipe ならそれを使う（既存挙動を変えない）
 //  2. --clipboard 指定ならクリップボードを使う
-//  3. それ以外は AILog（既定では Claude Code のセッションログ）から取得する
+//  3. それ以外は AILog（セッションログ自動検出）から取得する
 //  4. いずれも得られない場合は errNoAnswerSource を返す
 func resolveAnswer(src inputSource) (string, error) {
 	switch {
@@ -109,16 +109,10 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, _ := os.Getwd()
-			logRoot := ""
-			if home, err := os.UserHomeDir(); err == nil {
-				logRoot = home + "/.claude/projects"
-			}
 
 			var aiLogSource ailog.Source
-			if sid := os.Getenv("CLAUDE_CODE_SESSION_ID"); sid != "" {
-				aiLogSource = ailog.ClaudeSessionLog{LogRoot: logRoot, Cwd: cwd, SessionID: sid}
-			} else {
-				aiLogSource = ailog.ClaudeLog{LogRoot: logRoot, Cwd: cwd}
+			if p := ailog.Detect(os.Getenv, cwd); p != nil {
+				aiLogSource = p
 			}
 
 			src := inputSource{

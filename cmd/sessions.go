@@ -20,12 +20,12 @@ import (
 var errSessionsCancelled = fmt.Errorf("sessions selection: %w", ErrCancelled)
 
 type sessionsDeps struct {
-	LogRoot    string
-	Cwd        string
-	N          int
-	OutputFile string
-	Getenv     func(string) string
-	OpenEditor openEditorFunc
+	Provider      ailog.Provider
+	Cwd           string
+	N             int
+	OutputFile    string
+	Getenv        func(string) string
+	OpenEditor    openEditorFunc
 	RunSessionTUI func(tui.SessionSelectorModel) (tui.SessionSelectorModel, error)
 	RunTUI        func(tui.SelectorModel) (tui.SelectorModel, error)
 
@@ -44,7 +44,12 @@ func defaultRunSessionTUI(m tui.SessionSelectorModel) (tui.SessionSelectorModel,
 }
 
 func runSessions(deps sessionsDeps, stdout, stderr io.Writer) error {
-	sessions, err := ailog.ListSessions(deps.LogRoot, deps.Cwd, deps.N)
+	if deps.Provider == nil {
+		fmt.Fprintln(stderr, "Error: セッション一覧を取得できません。")
+		return fmt.Errorf("no AI log provider detected")
+	}
+
+	sessions, err := deps.Provider.ListSessions(deps.N)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: セッション一覧を取得できません。")
 		return err
@@ -82,7 +87,7 @@ func runSessions(deps sessionsDeps, stdout, stderr io.Writer) error {
 	if sessionResult.Filter() != "" {
 		entryLimit = 0
 	}
-	entries, err := ailog.LastNEntries(selected.LogPath, entryLimit)
+	entries, err := deps.Provider.ReadEntries(selected.LogPath, entryLimit)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: 選択されたセッションにエントリがありません。")
 		return err
@@ -206,13 +211,10 @@ func newSessionsCmd() *cobra.Command {
 		Short: "セッション一覧から選択してAI応答履歴を引用する",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, _ := os.Getwd()
-			logRoot := ""
-			if home, err := os.UserHomeDir(); err == nil {
-				logRoot = home + "/.claude/projects"
-			}
+			provider := ailog.Detect(os.Getenv, cwd)
 
 			deps := sessionsDeps{
-				LogRoot:       logRoot,
+				Provider:      provider,
 				Cwd:           cwd,
 				N:             n,
 				OutputFile:    outputFile,

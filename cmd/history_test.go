@@ -33,7 +33,7 @@ func fakeRunTUICancelled() func(tui.SelectorModel) (tui.SelectorModel, error) {
 
 func alwaysHasTTY() bool { return true }
 
-func setupTestLog(t *testing.T) (string, string) {
+func setupTestLog(t *testing.T) (ailog.Provider, string) {
 	t.Helper()
 	logRoot := t.TempDir()
 	cwd := "/Users/tester/project"
@@ -50,12 +50,13 @@ func setupTestLog(t *testing.T) (string, string) {
 		t.Fatalf("failed to write log file: %v", err)
 	}
 
-	return logRoot, cwd
+	provider := &ailog.ClaudeProvider{LogRoot: logRoot, Cwd: cwd}
+	return provider, cwd
 }
 
 // 選択したエントリがblockquote化されてエディタで開かれ、stdoutに出力される
 func TestRunHistory_選択してエディタで開く(t *testing.T) {
-	logRoot, cwd := setupTestLog(t)
+	provider, cwd := setupTestLog(t)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-editor.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -63,8 +64,8 @@ func TestRunHistory_選択してエディタで開く(t *testing.T) {
 	}
 
 	deps := historyDeps{
-		LogRoot: logRoot,
-		Cwd:     cwd,
+		Provider: provider,
+		Cwd:      cwd,
 		N:       10,
 		HasTTY:  alwaysHasTTY,
 		Getenv: func(key string) string {
@@ -90,11 +91,11 @@ func TestRunHistory_選択してエディタで開く(t *testing.T) {
 
 // キャンセルした場合はerrHistoryCancelledを返す
 func TestRunHistory_キャンセル(t *testing.T) {
-	logRoot, cwd := setupTestLog(t)
+	provider, cwd := setupTestLog(t)
 
 	deps := historyDeps{
-		LogRoot: logRoot,
-		Cwd:     cwd,
+		Provider: provider,
+		Cwd:      cwd,
 		N:       10,
 		HasTTY:  alwaysHasTTY,
 		Getenv:  func(string) string { return "" },
@@ -111,9 +112,9 @@ func TestRunHistory_キャンセル(t *testing.T) {
 // ログが見つからない場合はエラーを返す
 func TestRunHistory_ログなし(t *testing.T) {
 	deps := historyDeps{
-		LogRoot: t.TempDir(),
-		Cwd:     "/no/such/project",
-		N:       10,
+		Provider: &ailog.ClaudeProvider{LogRoot: t.TempDir(), Cwd: "/no/such/project"},
+		Cwd:      "/no/such/project",
+		N:        10,
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -123,34 +124,30 @@ func TestRunHistory_ログなし(t *testing.T) {
 	}
 }
 
-// セッションID環境変数が設定されている場合、そのセッションのログを使う
+// セッションID指定で特定のセッションのログを使う
 func TestRunHistory_セッションID環境変数で特定(t *testing.T) {
 	logRoot := t.TempDir()
 	cwd := "/Users/tester/project"
 	dir := filepath.Join(logRoot, ailog.EncodeProjectDir(cwd))
 	os.MkdirAll(dir, 0o755)
 
-	// ターゲットセッション（セッションID指定で選ばれるべき）
 	targetID := "target-session-id"
 	os.WriteFile(filepath.Join(dir, targetID+".jsonl"), []byte(
 		`{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"ターゲットの回答"}]}}
 `), 0o644)
 
-	// mtimeが新しい別セッション（セッションID未指定なら こちらが選ばれる）
 	otherFile := filepath.Join(dir, "other.jsonl")
 	os.WriteFile(otherFile, []byte(
 		`{"type":"assistant","timestamp":"2026-01-01T11:00:00.000Z","message":{"content":[{"type":"text","text":"別セッションの回答"}]}}
 `), 0o644)
 
+	provider := &ailog.ClaudeProvider{LogRoot: logRoot, Cwd: cwd, SessionID: targetID}
 	deps := historyDeps{
-		LogRoot: logRoot,
-		Cwd:     cwd,
-		N:       10,
-		HasTTY:  alwaysHasTTY,
+		Provider: provider,
+		Cwd:      cwd,
+		N:        10,
+		HasTTY:   alwaysHasTTY,
 		Getenv: func(key string) string {
-			if key == "CLAUDE_CODE_SESSION_ID" {
-				return targetID
-			}
 			if key == "PINLINE_EDITOR" {
 				return "true"
 			}
@@ -189,10 +186,10 @@ func TestNewRootCmd_historyサブコマンド登録(t *testing.T) {
 
 // TTY無しかつtmux無しの場合はエラーメッセージを返す
 func TestRunHistory_TTY無しtmux無し(t *testing.T) {
-	logRoot, cwd := setupTestLog(t)
+	provider, cwd := setupTestLog(t)
 
 	deps := historyDeps{
-		LogRoot:       logRoot,
+		Provider:      provider,
 		Cwd:           cwd,
 		N:             10,
 		HasTTY:        func() bool { return false },

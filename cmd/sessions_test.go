@@ -12,7 +12,7 @@ import (
 	"github.com/yyYank/pinline/tui"
 )
 
-func setupTestSessions(t *testing.T) (string, string) {
+func setupTestSessions(t *testing.T) (ailog.Provider, string) {
 	t.Helper()
 	logRoot := t.TempDir()
 	cwd := "/Users/tester/project"
@@ -31,7 +31,8 @@ func setupTestSessions(t *testing.T) (string, string) {
 	os.WriteFile(filepath.Join(dir, "session-1.jsonl"), []byte(s1), 0o644)
 	os.WriteFile(filepath.Join(dir, "session-2.jsonl"), []byte(s2), 0o644)
 
-	return logRoot, cwd
+	provider := &ailog.ClaudeProvider{LogRoot: logRoot, Cwd: cwd}
+	return provider, cwd
 }
 
 func fakeRunSessionTUI(selectIndex int) func(tui.SessionSelectorModel) (tui.SessionSelectorModel, error) {
@@ -55,14 +56,14 @@ func fakeRunSessionTUICancelled() func(tui.SessionSelectorModel) (tui.SessionSel
 
 // セッション選択→応答選択→blockquote化→エディタ→stdout
 func TestRunSessions_正常フロー(t *testing.T) {
-	logRoot, cwd := setupTestSessions(t)
+	provider, cwd := setupTestSessions(t)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-editor.sh")
 	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
 
 	deps := sessionsDeps{
-		LogRoot: logRoot,
-		Cwd:     cwd,
+		Provider: provider,
+		Cwd:      cwd,
 		N:       10,
 		HasTTY:  alwaysHasTTY,
 		Getenv: func(key string) string {
@@ -89,10 +90,10 @@ func TestRunSessions_正常フロー(t *testing.T) {
 
 // セッション選択でキャンセルした場合
 func TestRunSessions_セッション選択キャンセル(t *testing.T) {
-	logRoot, cwd := setupTestSessions(t)
+	provider, cwd := setupTestSessions(t)
 
 	deps := sessionsDeps{
-		LogRoot:       logRoot,
+		Provider:      provider,
 		Cwd:           cwd,
 		N:             10,
 		HasTTY:        alwaysHasTTY,
@@ -110,9 +111,9 @@ func TestRunSessions_セッション選択キャンセル(t *testing.T) {
 // ログが見つからない場合はエラー
 func TestRunSessions_ログなし(t *testing.T) {
 	deps := sessionsDeps{
-		LogRoot: t.TempDir(),
-		Cwd:     "/no/such/project",
-		N:       10,
+		Provider: &ailog.ClaudeProvider{LogRoot: t.TempDir(), Cwd: "/no/such/project"},
+		Cwd:      "/no/such/project",
+		N:        10,
 	}
 
 	var stdout, stderr bytes.Buffer
