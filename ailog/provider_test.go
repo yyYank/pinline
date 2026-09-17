@@ -34,6 +34,19 @@ func TestDetect_PINLINE_PROVIDER環境変数で強制指定(t *testing.T) {
 	})
 }
 
+func TestDetect_CODEX_HOMEでCodexProvider(t *testing.T) {
+	getenv := func(key string) string {
+		if key == "CODEX_HOME" {
+			return "/Users/tester/.codex"
+		}
+		return ""
+	}
+	p := Detect(getenv, "/some/cwd")
+	if _, ok := p.(*CodexProvider); !ok {
+		t.Errorf("got %T, want *CodexProvider", p)
+	}
+}
+
 func TestDetect_CLAUDE_CODE_SESSION_IDでClaudeProvider(t *testing.T) {
 	sid := "test-session-123"
 	getenv := func(key string) string {

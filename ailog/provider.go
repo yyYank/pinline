@@ -59,10 +59,11 @@ var _ Provider = (*ClaudeProvider)(nil)
 // 検出順序:
 //  1. PINLINE_PROVIDER 環境変数（"claude" / "codex"）
 //  2. CLAUDE_CODE_SESSION_ID 環境変数 → Claude Code
-//  3. ~/.claude/projects が存在 → Claude Code
-//  4. ~/.codex/sessions が存在 → Codex
-//  5. 両方存在する場合は、対象 cwd のログがある方を優先
-//  6. どちらもなければ nil
+//  3. CODEX_HOME 環境変数 → Codex
+//  4. ~/.claude/projects が存在 → Claude Code
+//  5. ~/.codex/sessions が存在 → Codex
+//  6. 両方存在する場合は、対象 cwd のログがある方を優先（より新しいログを持つ方）
+//  7. どちらもなければ nil
 func Detect(getenv func(string) string, cwd string) Provider {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -93,6 +94,13 @@ func Detect(getenv func(string) string, cwd string) Provider {
 		}
 	}
 
+	if getenv("CODEX_HOME") != "" {
+		return &CodexProvider{
+			LogRoot: filepath.Join(home, ".codex", "sessions"),
+			Cwd:     cwd,
+		}
+	}
+
 	claudeRoot := filepath.Join(home, ".claude", "projects")
 	codexRoot := filepath.Join(home, ".codex", "sessions")
 
@@ -105,18 +113,35 @@ func Detect(getenv func(string) string, cwd string) Provider {
 	case codexExists && !claudeExists:
 		return &CodexProvider{LogRoot: codexRoot, Cwd: cwd}
 	case claudeExists && codexExists:
-		cp := &ClaudeProvider{LogRoot: claudeRoot, Cwd: cwd}
-		if _, err := cp.CurrentLogPath(); err == nil {
-			return cp
-		}
-		xp := &CodexProvider{LogRoot: codexRoot, Cwd: cwd}
-		if _, err := xp.CurrentLogPath(); err == nil {
-			return xp
-		}
-		return cp
+		return detectByLatestLog(claudeRoot, codexRoot, cwd)
 	default:
 		return nil
 	}
+}
+
+func detectByLatestLog(claudeRoot, codexRoot, cwd string) Provider {
+	cp := &ClaudeProvider{LogRoot: claudeRoot, Cwd: cwd}
+	xp := &CodexProvider{LogRoot: codexRoot, Cwd: cwd}
+
+	claudePath, claudeErr := cp.CurrentLogPath()
+	codexPath, codexErr := xp.CurrentLogPath()
+
+	if claudeErr != nil && codexErr != nil {
+		return cp
+	}
+	if claudeErr != nil {
+		return xp
+	}
+	if codexErr != nil {
+		return cp
+	}
+
+	claudeInfo, _ := os.Stat(claudePath)
+	codexInfo, _ := os.Stat(codexPath)
+	if claudeInfo != nil && codexInfo != nil && codexInfo.ModTime().After(claudeInfo.ModTime()) {
+		return xp
+	}
+	return cp
 }
 
 func dirExists(path string) bool {
