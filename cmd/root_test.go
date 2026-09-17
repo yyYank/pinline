@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -232,7 +233,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor); err != nil {
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -261,7 +262,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor); err != nil {
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
@@ -288,12 +289,48 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor); err != nil {
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		if stdout.String() != "> セッションログの回答" {
 			t.Errorf("stdout = %q, want %q", stdout.String(), "> セッションログの回答")
+		}
+	})
+
+	t.Run("afterOutputが指定されていればstdout出力後に呼ばれる", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeFakeEditor(t, dir, "")
+
+		getenv := func(key string) string {
+			if key == "PINLINE_EDITOR" {
+				return script
+			}
+			return ""
+		}
+
+		var callbackText string
+		afterOutput := func(text string, stderr io.Writer) {
+			callbackText = text
+			fmt.Fprintln(stderr, "プロンプトをクリップボードにコピーしました")
+		}
+
+		src := inputSource{
+			StdinIsPipe:   false,
+			ClipboardFlag: false,
+			AILog:         fakeAILog{text: "Codexの回答"},
+		}
+		var stdout, stderr bytes.Buffer
+
+		if err := run(src, &stdout, &stderr, getenv, fakeOpenEditor, afterOutput); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if callbackText != "> Codexの回答" {
+			t.Errorf("afterOutput got %q, want %q", callbackText, "> Codexの回答")
+		}
+		if !strings.Contains(stderr.String(), "プロンプトをクリップボードにコピーしました") {
+			t.Errorf("stderr = %q, want to contain clipboard message", stderr.String())
 		}
 	})
 
@@ -321,7 +358,7 @@ func TestRun(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 
-		err := run(src, &stdout, &stderr, getenv, fakeOpenEditor)
+		err := run(src, &stdout, &stderr, getenv, fakeOpenEditor, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

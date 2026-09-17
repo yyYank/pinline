@@ -22,7 +22,7 @@ import (
 const usageMessage = `使い方:
   cat answer.txt | pinline   # stdin から AI 回答を読み込む
   pinline --clipboard        # クリップボードから読み込む
-  pinline                    # Claude Code の直前セッションログから読み込む`
+  pinline                    # 直前の AI セッションログから読み込む`
 
 // errNoAnswerSource はどの入力元からも AI 回答を取得できなかったことを表す。
 var errNoAnswerSource = errors.New("no AI answer source available")
@@ -51,7 +51,7 @@ type inputSource struct {
 // resolveAnswer は SPEC.md §21 の優先順位に従って AI 回答本文を取得する。
 //  1. stdin が pipe ならそれを使う（既存挙動を変えない）
 //  2. --clipboard 指定ならクリップボードを使う
-//  3. それ以外は AILog（既定では Claude Code のセッションログ）から取得する
+//  3. それ以外は AILog（セッションログ自動検出）から取得する
 //  4. いずれも得られない場合は errNoAnswerSource を返す
 func resolveAnswer(src inputSource) (string, error) {
 	switch {
@@ -109,16 +109,20 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, _ := os.Getwd()
-			logRoot := ""
-			if home, err := os.UserHomeDir(); err == nil {
-				logRoot = home + "/.claude/projects"
-			}
 
 			var aiLogSource ailog.Source
-			if sid := os.Getenv("CLAUDE_CODE_SESSION_ID"); sid != "" {
-				aiLogSource = ailog.ClaudeSessionLog{LogRoot: logRoot, Cwd: cwd, SessionID: sid}
-			} else {
-				aiLogSource = ailog.ClaudeLog{LogRoot: logRoot, Cwd: cwd}
+			var afterOutput afterOutputFunc
+			if p := ailog.Detect(os.Getenv, cwd); p != nil {
+				aiLogSource = p
+				if _, ok := p.(*ailog.CodexProvider); ok {
+					afterOutput = func(text string, stderr io.Writer) {
+						if err := clipboard.WriteClipboard(clipboard.DefaultWriteCommand, text); err != nil {
+							fmt.Fprintf(stderr, "Warning: クリップボードへのコピーに失敗しました: %v\n", err)
+							return
+						}
+						fmt.Fprintln(stderr, "プロンプトをクリップボードにコピーしました")
+					}
+				}
 			}
 
 			src := inputSource{
@@ -130,7 +134,7 @@ func NewRootCmd() *cobra.Command {
 				AILog:            aiLogSource,
 			}
 
-			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv, defaultOpenEditor)
+			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv, defaultOpenEditor, afterOutput)
 		},
 	}
 
@@ -166,7 +170,9 @@ func defaultOpenEditor(command []string, path string) error {
 //  4. $EDITOR で開く（stdin/stdout がパイプでも /dev/tty へフォールバック）
 //  5. エディタ終了（保存完了）を待つ
 //  6. 編集済み Markdown を stdout へ返す（UI メッセージは stderr）
-func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, openEditor openEditorFunc) error {
+type afterOutputFunc func(text string, stderr io.Writer)
+
+func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, openEditor openEditorFunc, afterOutput afterOutputFunc) error {
 	input, err := resolveAnswer(src)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: could not obtain an AI answer to edit.")
@@ -209,6 +215,10 @@ func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, 
 
 	if err := transport.WriteStdout(stdout, string(edited)); err != nil {
 		return fmt.Errorf("failed to write stdout: %w", err)
+	}
+
+	if afterOutput != nil {
+		afterOutput(string(edited), stderr)
 	}
 
 	return nil

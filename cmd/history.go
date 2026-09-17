@@ -20,7 +20,7 @@ import (
 var errHistoryCancelled = fmt.Errorf("history selection: %w", ErrCancelled)
 
 type historyDeps struct {
-	LogRoot    string
+	Provider   ailog.Provider
 	Cwd        string
 	N          int
 	OutputFile string
@@ -52,23 +52,18 @@ func defaultRunTUI(m tui.SelectorModel) (tui.SelectorModel, error) {
 }
 
 func runHistory(deps historyDeps, stdout, stderr io.Writer) error {
-	var logPath string
-	var err error
-	getenv := deps.Getenv
-	if getenv == nil {
-		getenv = os.Getenv
+	if deps.Provider == nil {
+		fmt.Fprintln(stderr, "Error: セッションログが見つかりません。")
+		return fmt.Errorf("no AI log provider detected")
 	}
-	if sid := getenv("CLAUDE_CODE_SESSION_ID"); sid != "" {
-		logPath, err = ailog.SessionLogPathByID(deps.LogRoot, deps.Cwd, sid)
-	} else {
-		logPath, err = ailog.LatestSessionLogPath(deps.LogRoot, deps.Cwd)
-	}
+
+	logPath, err := deps.Provider.CurrentLogPath()
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: セッションログが見つかりません。")
 		return err
 	}
 
-	entries, err := ailog.LastNAssistantTexts(logPath, deps.N)
+	entries, err := deps.Provider.ReadAssistantTexts(logPath, deps.N)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: assistant応答が見つかりません。")
 		return err
@@ -199,13 +194,10 @@ func newHistoryCmd() *cobra.Command {
 		Short: "過去のAI応答履歴を選択してエディタで開く",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, _ := os.Getwd()
-			logRoot := ""
-			if home, err := os.UserHomeDir(); err == nil {
-				logRoot = home + "/.claude/projects"
-			}
+			provider := ailog.Detect(os.Getenv, cwd)
 
 			deps := historyDeps{
-				LogRoot:       logRoot,
+				Provider:      provider,
 				Cwd:           cwd,
 				N:             n,
 				OutputFile:    outputFile,
