@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.0.5](https://github.com/yyYank/pinline/compare/v0.0.4...v0.0.5) - 2026-09-17
+
+- Provider抽象化によるCodex対応・ツール非依存化 by @yyYank in https://github.com/yyYank/pinline/pull/9
+
 ## [v0.0.4](https://github.com/yyYank/pinline/compare/v0.0.3...v0.0.4) - 2026-09-11
 
 - fix: セッションID環境変数によるセッション特定とパイプ経由のTUI入力修正 by @yyYank in https://github.com/yyYank/pinline/pull/7
