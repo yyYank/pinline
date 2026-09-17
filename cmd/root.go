@@ -111,8 +111,18 @@ func NewRootCmd() *cobra.Command {
 			cwd, _ := os.Getwd()
 
 			var aiLogSource ailog.Source
+			var afterOutput afterOutputFunc
 			if p := ailog.Detect(os.Getenv, cwd); p != nil {
 				aiLogSource = p
+				if _, ok := p.(*ailog.CodexProvider); ok {
+					afterOutput = func(text string, stderr io.Writer) {
+						if err := clipboard.WriteClipboard(clipboard.DefaultWriteCommand, text); err != nil {
+							fmt.Fprintf(stderr, "Warning: クリップボードへのコピーに失敗しました: %v\n", err)
+							return
+						}
+						fmt.Fprintln(stderr, "プロンプトをクリップボードにコピーしました")
+					}
+				}
 			}
 
 			src := inputSource{
@@ -124,7 +134,7 @@ func NewRootCmd() *cobra.Command {
 				AILog:            aiLogSource,
 			}
 
-			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv, defaultOpenEditor)
+			return run(src, cmd.OutOrStdout(), cmd.ErrOrStderr(), os.Getenv, defaultOpenEditor, afterOutput)
 		},
 	}
 
@@ -160,7 +170,9 @@ func defaultOpenEditor(command []string, path string) error {
 //  4. $EDITOR で開く（stdin/stdout がパイプでも /dev/tty へフォールバック）
 //  5. エディタ終了（保存完了）を待つ
 //  6. 編集済み Markdown を stdout へ返す（UI メッセージは stderr）
-func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, openEditor openEditorFunc) error {
+type afterOutputFunc func(text string, stderr io.Writer)
+
+func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, openEditor openEditorFunc, afterOutput afterOutputFunc) error {
 	input, err := resolveAnswer(src)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error: could not obtain an AI answer to edit.")
@@ -203,6 +215,10 @@ func run(src inputSource, stdout, stderr io.Writer, getenv func(string) string, 
 
 	if err := transport.WriteStdout(stdout, string(edited)); err != nil {
 		return fmt.Errorf("failed to write stdout: %w", err)
+	}
+
+	if afterOutput != nil {
+		afterOutput(string(edited), stderr)
 	}
 
 	return nil
